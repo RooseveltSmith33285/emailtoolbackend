@@ -152,6 +152,7 @@ app.post('/api/convert-template', upload.single('template'), async (req, res) =>
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
+    const emailSubject = "Enrichify mail";
     const filePath = req.file.path;
 
     // Read the PDF file
@@ -211,7 +212,7 @@ app.post('/api/convert-template', upload.single('template'), async (req, res) =>
       // Send emails sequentially with delay
       for (const contact of contacts) {
         try {
-          await sendEmail(transporter, contact.email, htmlContent, 'Your Document');
+          await sendEmail(transporter, contact.email, htmlContent, emailSubject);
           await new Promise(resolve => setTimeout(resolve, 200)); // 200ms delay
         } catch (emailError) {
           console.error(`Failed to send to ${contact.email}:`, emailError.message);

@@ -3,6 +3,9 @@ const mongoose=require('mongoose')
 const contactSchema=mongoose.Schema({
     email:{
         type:String
+    },
+    industry:{
+        type:String
     }
 })
 

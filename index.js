@@ -6,14 +6,26 @@ const path = require('path');
 const axios = require('axios');
 
 const csv = require('csv-parser');
+
+const cron = require('node-cron');
+const zlib = require('zlib');
+const { gzip } = require('zlib');
 const juice = require('juice');
 const nodemailer = require('nodemailer');
 
 const app = express();
 const mongoose = require('mongoose');
 const contactmodel = require('./contact');
+const scheduleModel = require('./scheduled');
 
-const connect = mongoose.connect(`mongodb+srv://user:user@cluster0.pfn059x.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`);
+const connect = mongoose.connect(`mongodb+srv://developer:iBN20pvyXZs3cM1l@cluster0.k1ekxcf.mongodb.net/`);
+
+// const connect = mongoose.connect(`mongodb://127.0.0.1/emailproject`);
+const util = require('util');
+
+const { gunzip } = require('zlib');
+const { promisify } = require('util');
+const gunzipAsync = promisify(gunzip);
 
 // Middleware
 app.use(cors());
@@ -92,12 +104,30 @@ const csvDiskStorage = multer.diskStorage({
 const CONVERT_API_TOKEN = 'NRvX3zRchgRlgoURevXe6OSTqjxEj0go';
 const CONVERT_API_URL = 'https://v2.convertapi.com/convert/pdf/to/html';
 
+
+app.get('/api/getIndustries',async(req,res)=>{
+  try{
+let contacts=await contactmodel.find({})
+
+return res.status(200).json({
+  contacts
+})
+  }catch(e){
+    console.error('HTML email sending error:', error);
+    res.status(500).json({ 
+      error: 'Failed to send HTML emails: ' + error.message 
+    });
+  }
+})
+
 // HTML email template endpoint
 app.post('/api/send-html-template', htmlUpload.single('htmlTemplate'), async (req, res) => {
   try {
+  
     if (!req.file) {
       return res.status(400).json({ error: 'No HTML file uploaded' });
     }
+    const {subject,industry}=req.body;
 
     // Use buffer instead of file path
     let htmlContent;
@@ -113,7 +143,7 @@ app.post('/api/send-html-template', htmlUpload.single('htmlTemplate'), async (re
     htmlContent = createEmailTemplate(htmlContent);
 
     // Rest of your code remains the same...
-    const contacts = await contactmodel.find({});
+    const contacts = await contactmodel.find({industry});
     
     if (contacts.length === 0) {
       return res.status(400).json({ 
@@ -126,7 +156,7 @@ app.post('/api/send-html-template', htmlUpload.single('htmlTemplate'), async (re
     let successCount = 0;
     let failedCount = 0;
     const failedEmails = [];
-    const emailSubject = "Enrichify mail";
+    const emailSubject = subject;
     for (const contact of contacts) {
       try {
         await sendEmail(transporter, contact.email, htmlContent, emailSubject);
@@ -157,6 +187,83 @@ app.post('/api/send-html-template', htmlUpload.single('htmlTemplate'), async (re
   }
 });
 
+
+
+
+
+app.post('/api/send-html-schedular-template', htmlUpload.single('htmlTemplate'), async (req, res) => {
+  try {
+   
+    if (!req.file) {
+      return res.status(400).json({ error: 'No HTML file uploaded' });
+    }
+    const {subject,industry,scheduledDate,scheduledTime}=req.body;
+
+    // Use buffer instead of file path
+    let htmlContent;
+    if (req.file.buffer) {
+      htmlContent = req.file.buffer.toString('utf8');
+    } else if (req.file.path) {
+      htmlContent = fs.readFileSync(req.file.path, 'utf8');
+    } else {
+      return res.status(400).json({ error: 'Invalid file upload' });
+    }
+
+    // Process HTML to make it email client compatible
+    htmlContent = createEmailTemplate(htmlContent);
+    const compressedHtml = await zlib.gzipSync(htmlContent);
+
+    // Rest of your code remains the same...
+    const contacts = await contactmodel.find({industry});
+    
+    if (contacts.length === 0) {
+      return res.status(400).json({ 
+        error: 'No contacts found in database. Please upload contacts first.' 
+      });
+    }
+
+
+    
+    let successCount = 0;
+    let failedCount = 0;
+    const failedEmails = [];
+   
+    for (const contact of contacts) {
+      try {
+    await scheduleModel.create({
+      email:contact.email,
+      industry,
+      subject,
+      date:scheduledDate,
+      time:scheduledTime,
+      htmlcontent:compressedHtml
+    })
+        successCount++;
+        await new Promise(resolve => setTimeout(resolve, 200));
+      } catch (emailError) {
+        console.error(`Failed to send to ${contact.email}:`, emailError.message);
+        failedCount++;
+        failedEmails.push(contact.email);
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: `Email ready for schedule`,
+      totalContacts: contacts.length,
+      successCount,
+      failedCount,
+      failedEmails: failedEmails.length > 0 ? failedEmails : undefined,
+      sampleHtml: htmlContent.substring(0, 500) + '...'
+    });
+
+  } catch (error) {
+    console.error('HTML email sending error:', error);
+    res.status(500).json({ 
+      error: 'Failed to send HTML emails: ' + error.message 
+    });
+  }
+});
 // PDF to HTML conversion endpoint (existing)
 app.post('/api/convert-template', upload.single('template'), async (req, res) => {
   try {
@@ -479,27 +586,57 @@ app.post('/api/extract-emails', csvUploadDisk.single('contacts'), async (req, re
 
     const filePath = req.file.path;
     const emails = [];
-    const emailSet = new Set(); // To avoid duplicates
+    const emailSet = new Set(); 
+    let hasIndustryColumn = false;
+    let hasEmailColumn = false;
+    let rowCount = 0;
 
     // Parse CSV and extract emails
     await new Promise((resolve, reject) => {
       fs.createReadStream(filePath)
         .pipe(csv())
         .on('data', (row) => {
+          rowCount++;
+          
+          // Check for required columns on first row
+          if (rowCount === 1) {
+            const columns = Object.keys(row);
+            
+            // Check if email column exists
+            hasEmailColumn = columns.some(key => 
+              key.toLowerCase().includes('email')
+            );
+            
+            // Check if industry column exists
+            hasIndustryColumn = columns.some(key => 
+              key.toLowerCase().includes('industry')
+            );
+            
+            console.log('CSV Columns found:', columns);
+            console.log('Has email column:', hasEmailColumn);
+            console.log('Has industry column:', hasIndustryColumn);
+          }
+
           // Look for email column (case insensitive)
-          const emailValue = Object.keys(row).find(key => 
+          const emailKey = Object.keys(row).find(key => 
             key.toLowerCase().includes('email')
           );
+
+          const industryKey = Object.keys(row).find(key => 
+            key.toLowerCase().includes('industry')
+          );
           
-          if (emailValue && row[emailValue]) {
-            const email = row[emailValue].trim();
+          if (emailKey && row[emailKey]) {
+            const email = row[emailKey].trim();
+            const industry = industryKey && row[industryKey] ? row[industryKey].trim() : '';
             
             // Basic email validation
             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
             if (emailRegex.test(email) && !emailSet.has(email.toLowerCase())) {
               emailSet.add(email.toLowerCase());
               emails.push({
-                email
+                email,
+                industry: industry || 'Not specified'
               });
             }
           }
@@ -515,20 +652,35 @@ app.post('/api/extract-emails', csvUploadDisk.single('contacts'), async (req, re
     // Clean up uploaded file
     fs.unlinkSync(filePath);
 
-    if (emails.length === 0) {
+    // Validate required columns
+    if (!hasEmailColumn) {
       return res.status(400).json({ 
-        error: 'No valid emails found in the CSV file. Make sure the CSV has an "email" column.' 
+        error: 'CSV file must contain an "email" column. Please check your CSV file format.' 
       });
     }
 
+    if (!hasIndustryColumn) {
+      return res.status(400).json({ 
+        error: 'CSV file must contain an "industry" column. Please add an industry column to your CSV file.' 
+      });
+    }
+
+    if (emails.length === 0) {
+      return res.status(400).json({ 
+        error: 'No valid emails found in the CSV file. Make sure the CSV has valid email addresses in the email column.' 
+      });
+    }
+
+    // Check for existing contacts in database
     let contacts = await contactmodel.find({});
     const filteredContacts = emails.filter(emailObj => {
       return !contacts.some(contact => contact.email === emailObj.email);
     });
     
-    console.log("filteredContacts");
-    console.log(filteredContacts);
+    console.log("Filtered contacts to add:", filteredContacts.length);
+    console.log("Sample contacts:", filteredContacts.slice(0, 3));
     
+    // Insert new contacts if any
     if (filteredContacts.length > 0) {
       await contactmodel.insertMany(filteredContacts);
     }
@@ -539,7 +691,12 @@ app.post('/api/extract-emails', csvUploadDisk.single('contacts'), async (req, re
       count: filteredContacts.length,
       totalProcessed: emails.length,
       duplicatesSkipped: emails.length - filteredContacts.length,
-      originalFilename: req.file.originalname
+      originalFilename: req.file.originalname,
+      validation: {
+        hasEmailColumn,
+        hasIndustryColumn,
+        rowsProcessed: rowCount
+      }
     });
 
   } catch (error) {
@@ -607,6 +764,486 @@ app.get('/api/health', (req, res) => {
     message: 'PDF to HTML converter, HTML email sender, and email extractor service is running'
   });
 });
+
+
+
+
+
+
+
+
+
+
+
+
+//schedular
+//schedular
+async function sendScheduledEmail(emailRecord) {
+  try {
+      let htmlContent;
+      
+      // Check if htmlcontent needs decompression or is already a string
+      if (Buffer.isBuffer(emailRecord.htmlcontent)) {
+          // It's a buffer, try to decompress
+          try {
+              const decompressedHtml = await gunzipAsync(emailRecord.htmlcontent);
+              htmlContent = decompressedHtml.toString('utf8');
+              console.log('Successfully decompressed HTML content');
+          } catch (decompressError) {
+              console.log('Decompression failed, treating as raw buffer:', decompressError.message);
+              // If decompression fails, treat as raw buffer
+              htmlContent = emailRecord.htmlcontent.toString('utf8');
+          }
+      } else if (emailRecord.htmlcontent && emailRecord.htmlcontent.buffer) {
+          // It's an object with buffer property
+          try {
+              const decompressedHtml = await gunzipAsync(emailRecord.htmlcontent.buffer);
+              htmlContent = decompressedHtml.toString('utf8');
+              console.log('Successfully decompressed HTML content from buffer property');
+          } catch (decompressError) {
+              console.log('Decompression failed, treating as raw buffer:', decompressError.message);
+              // If decompression fails, treat as raw buffer
+              htmlContent = emailRecord.htmlcontent.buffer.toString('utf8');
+          }
+      } else {
+          // It's already a string or other format
+          htmlContent = emailRecord.htmlcontent.toString();
+          console.log('HTML content used as-is (no decompression needed)');
+      }
+
+    
+      if (!htmlContent || htmlContent.trim().length === 0) {
+          throw new Error('HTML content is empty after processing');
+      }
+
+      console.log(`HTML content length: ${htmlContent.length} characters`);
+
+     
+      const transporter = createEmailTransporter();
+
+     
+      const mailOptions = {
+        from: '"Lead Enrichment System" <leads@enrichifydata.com>',
+        subject: emailRecord.subject,
+        to: emailRecord.email,
+        html: htmlContent,
+      };
+      
+     
+      await transporter.sendMail(mailOptions);
+
+     
+      await scheduleModel.findByIdAndUpdate(emailRecord._id, { status: 'sent' });
+      
+      console.log(`Email sent successfully to ${emailRecord.email}`);
+      return true;
+  } catch (error) {
+      console.error(`Failed to send email to ${emailRecord.email}:`, error);
+      console.log('Error details:', error.message);
+      
+    
+      await scheduleModel.findByIdAndUpdate(emailRecord._id, { 
+          status: 'failed',
+          lastError: error.message,
+          lastErrorTime: new Date()
+      });
+      return false;
+  }
+}
+
+
+async function safeDecompress(data) {
+    console.log('Starting decompression process...');
+    
+    try {
+        let buffer;
+        
+ 
+        if (Buffer.isBuffer(data)) {
+            buffer = data;
+            console.log('Data is already a Buffer');
+        } else if (data && data.buffer && Buffer.isBuffer(data.buffer)) {
+            buffer = data.buffer;
+            console.log('Data has buffer property');
+        } else if (data && typeof data === 'object' && data.data) {
+          
+            buffer = Buffer.from(data.data);
+            console.log('Data converted from object.data');
+        } else if (typeof data === 'string') {
+           
+            console.log('Data is string, attempting to convert to binary...');
+            
+          
+            if (data.includes('<html') || data.includes('<!DOCTYPE') || data.includes('<div')) {
+                console.log('Data appears to already be HTML');
+                return data;
+            }
+            
+           
+            try {
+               
+                buffer = Buffer.from(data, 'latin1');
+                console.log('Converted string using latin1 encoding');
+            } catch (e) {
+                
+                try {
+                    buffer = Buffer.from(data, 'binary');
+                    console.log('Converted string using binary encoding');
+                } catch (e2) {
+                 
+                    const bytes = [];
+                    for (let i = 0; i < data.length; i++) {
+                        bytes.push(data.charCodeAt(i) & 0xFF);
+                    }
+                    buffer = Buffer.from(bytes);
+                    console.log('Converted string character by character');
+                }
+            }
+        } else {
+         
+            buffer = Buffer.from(data);
+            console.log('Data converted to Buffer (generic)');
+        }
+        
+        console.log(`Buffer length: ${buffer.length} bytes`);
+        
+        if (buffer.length < 2) {
+            throw new Error('Data too short to be gzipped');
+        }
+        
+       
+        const firstBytes = Array.from(buffer.slice(0, Math.min(16, buffer.length)))
+            .map(b => `0x${b.toString(16).padStart(2, '0')}`);
+        console.log('First bytes:', firstBytes.join(' '));
+        
+     
+        try {
+            console.log('Attempting gzip decompression...');
+            const decompressed = await gunzipAsync(buffer);
+            const result = decompressed.toString('utf8');
+            console.log(`✓ Gzip decompression successful! Result length: ${result.length}`);
+            
+         
+            if (result.includes('<') && result.includes('>')) {
+                console.log('✓ Result contains HTML tags');
+                return result;
+            } else {
+                console.log('⚠️ Result does not appear to be HTML, but returning anyway');
+                return result;
+            }
+        } catch (gzipError) {
+            console.log('✗ Gzip failed:', gzipError.message);
+        }
+        
+     
+        try {
+            const { inflate } = require('zlib');
+            const inflateAsync = promisify(inflate);
+            console.log('Attempting zlib inflate...');
+            const inflated = await inflateAsync(buffer);
+            const result = inflated.toString('utf8');
+            console.log(`✓ Zlib inflate successful! Result length: ${result.length}`);
+            return result;
+        } catch (inflateError) {
+            console.log('✗ Zlib inflate failed:', inflateError.message);
+        }
+        
+       
+        try {
+            const { inflateRaw } = require('zlib');
+            const inflateRawAsync = promisify(inflateRaw);
+            console.log('Attempting raw deflate...');
+            const inflated = await inflateRawAsync(buffer);
+            const result = inflated.toString('utf8');
+            console.log(`✓ Raw deflate successful! Result length: ${result.length}`);
+            return result;
+        } catch (deflateError) {
+            console.log('✗ Raw deflate failed:', deflateError.message);
+        }
+       
+        try {
+            console.log('Attempting to fix potential gzip header issues...');
+            
+        
+            for (let i = 0; i < Math.min(10, buffer.length - 2); i++) {
+                if (buffer[i] === 0x1f && buffer[i + 1] === 0x8b) {
+                    console.log(`Found gzip magic at offset ${i}`);
+                    const adjustedBuffer = buffer.slice(i);
+                    const decompressed = await gunzipAsync(adjustedBuffer);
+                    const result = decompressed.toString('utf8');
+                    console.log(`✓ Adjusted gzip successful! Result length: ${result.length}`);
+                    return result;
+                }
+            }
+        } catch (headerError) {
+            console.log('✗ Header fix attempt failed:', headerError.message);
+        }
+        
+    
+        try {
+            console.log('Attempting to recover from string corruption...');
+            
+          
+            const correctedBuffer = Buffer.from(buffer.toString('latin1'), 'latin1');
+            
+            if (correctedBuffer[0] === 0x1f && correctedBuffer[1] === 0x8b) {
+                const decompressed = await gunzipAsync(correctedBuffer);
+                const result = decompressed.toString('utf8');
+                console.log(`✓ String corruption recovery successful! Result length: ${result.length}`);
+                return result;
+            }
+        } catch (recoveryError) {
+            console.log('✗ String corruption recovery failed:', recoveryError.message);
+        }
+        
+       
+        console.log('All decompression attempts failed, returning as UTF-8 string');
+        const result = buffer.toString('utf8');
+        console.log(`Fallback result length: ${result.length}`);
+        return result;
+        
+    } catch (error) {
+        console.error('Critical error in safeDecompress:', error);
+        
+        const fallback = typeof data === 'string' ? data : String(data);
+        console.log(`Absolute fallback used`);
+        return fallback;
+    }
+}
+
+
+async function sendScheduledEmailSafe(emailRecord) {
+  try {
+   
+      const htmlContent = await safeDecompress(
+          emailRecord.htmlcontent.buffer || emailRecord.htmlcontent
+      );
+
+     
+      if (!htmlContent || htmlContent.trim().length === 0) {
+          throw new Error('HTML content is empty after processing');
+      }
+
+      console.log(`Processed HTML content: ${htmlContent.length} characters`);
+
+      const transporter = createEmailTransporter();
+
+     
+      const mailOptions = {
+        from: '"Lead Enrichment System" <leads@enrichifydata.com>',
+        subject: emailRecord.subject,
+        to: emailRecord.email,
+        html: htmlContent,
+      };
+      
+     
+      await transporter.sendMail(mailOptions);
+
+     
+      await scheduleModel.findByIdAndUpdate(emailRecord._id, { status: 'sent' });
+      
+      console.log(`Email sent successfully to ${emailRecord.email}`);
+      return true;
+  } catch (error) {
+      console.error(`Failed to send email to ${emailRecord.email}:`, error);
+      
+   
+      await scheduleModel.findByIdAndUpdate(emailRecord._id, { 
+          status: 'failed',
+          lastError: error.message,
+          lastErrorTime: new Date()
+      });
+      return false;
+  }
+}
+
+
+async function processPendingEmails() {
+  try {
+      console.log('Running email scheduler job...');
+      
+      const now = new Date();
+      
+      
+      const currentDateStr = now.toISOString().split('T')[0];
+      const currentTime = now.toTimeString().substring(0, 5); 
+      
+      console.log(`Current date string: ${currentDateStr}`);
+      console.log(`Current time: ${currentTime}`);
+      console.log(`Current datetime: ${now.toISOString()}`);
+      
+  
+      const todayStart = new Date(`${currentDateStr}T00:00:00.000Z`);
+      const yesterdayEnd = new Date(todayStart.getTime() - 1);
+      
+      console.log(`Today start: ${todayStart.toISOString()}`);
+      
+     
+      const pendingEmails = await scheduleModel.find({
+          $and: [
+              { $or: [{ status: 'pending' }, { status: 'failed' }] },
+              {
+                  $or: [
+                   
+                      { date: { $lt: todayStart } },
+                    
+                      { 
+                          date: { $eq: todayStart },
+                          time: { $lte: currentTime }
+                      }
+                  ]
+              }
+          ]
+      });
+
+      console.log(`Found ${pendingEmails.length} emails to process`);
+      
+    
+      pendingEmails.forEach(email => {
+          console.log(`Email ID: ${email._id}, Date: ${email.date}, Time: ${email.time}, Status: ${email.status}`);
+      });
+
+     
+      for (const email of pendingEmails) {
+          console.log(`Processing email to: ${email.email}`);
+    
+          const success = await sendScheduledEmailSafe(email);
+          if (success) {
+              console.log(`✓ Email sent to ${email.email}`);
+          } else {
+              console.log(`✗ Failed to send email to ${email.email}`);
+          }
+          await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      console.log('Email scheduler job completed');
+  } catch (error) {
+      console.error('Error in email scheduler job:', error);
+  }
+}
+
+
+async function debugEmailContent(emailId) {
+    try {
+        const email = await scheduleModel.findById(emailId);
+        if (!email) {
+            console.log('Email not found');
+            return;
+        }
+        
+        console.log('\n=== EMAIL DEBUG INFO ===');
+        console.log('Email ID:', emailId);
+        console.log('Email to:', email.email);
+        console.log('Subject:', email.subject);
+        console.log('Status:', email.status);
+        
+        console.log('\n=== HTML CONTENT ANALYSIS ===');
+        console.log('- htmlcontent type:', typeof email.htmlcontent);
+        console.log('- htmlcontent is Buffer:', Buffer.isBuffer(email.htmlcontent));
+        console.log('- htmlcontent is null/undefined:', email.htmlcontent == null);
+        
+        if (email.htmlcontent) {
+          
+            if (email.htmlcontent.buffer) {
+                console.log('- htmlcontent.buffer exists');
+                console.log('- htmlcontent.buffer type:', typeof email.htmlcontent.buffer);
+                console.log('- htmlcontent.buffer is Buffer:', Buffer.isBuffer(email.htmlcontent.buffer));
+                
+                if (Buffer.isBuffer(email.htmlcontent.buffer)) {
+                    const buffer = email.htmlcontent.buffer;
+                    console.log('- Buffer length:', buffer.length);
+                    
+                   
+                    const firstBytes = Array.from(buffer.slice(0, Math.min(32, buffer.length)))
+                        .map(b => `0x${b.toString(16).padStart(2, '0')}`);
+                    console.log('- First 32 bytes (hex):', firstBytes.join(' '));
+                    
+                   
+                    const asString = buffer.toString('utf8', 0, Math.min(100, buffer.length));
+                    console.log('- First 100 chars as UTF-8:', JSON.stringify(asString));
+                    
+                  
+                    if (buffer.length >= 2) {
+                        if (buffer[0] === 0x1f && buffer[1] === 0x8b) {
+                            console.log('- ✓ Gzip signature detected');
+                        } else if (buffer[0] === 0x78 && (buffer[1] === 0x9c || buffer[1] === 0x01 || buffer[1] === 0xda)) {
+                            console.log('- ✓ Zlib/Deflate signature detected');
+                        } else {
+                            console.log('- ✗ No known compression signature');
+                        }
+                    }
+                }
+            }
+            
+          
+            if (Buffer.isBuffer(email.htmlcontent)) {
+                console.log('- Direct buffer length:', email.htmlcontent.length);
+                const firstChars = email.htmlcontent.toString('utf8', 0, Math.min(100, email.htmlcontent.length));
+                console.log('- First 100 chars:', JSON.stringify(firstChars));
+            }
+            
+           
+            if (typeof email.htmlcontent === 'string') {
+                console.log('- String length:', email.htmlcontent.length);
+                console.log('- First 100 chars:', JSON.stringify(email.htmlcontent.substring(0, 100)));
+            }
+        }
+        
+        console.log('\n=== ATTEMPTING DECOMPRESSION ===');
+        try {
+            const decompressed = await safeDecompress(email.htmlcontent.buffer || email.htmlcontent);
+            console.log('✓ Decompression successful!');
+            console.log('- Decompressed length:', decompressed.length);
+            console.log('- Contains HTML tags:', /&lt;[^&gt;]+&gt;/.test(decompressed));
+            console.log('- First 200 chars:', JSON.stringify(decompressed.substring(0, 200)));
+            
+           
+            const htmlIndicators = ['<html', '<!DOCTYPE', '<div', '<p>', '<span', '<body', '<head'];
+            const foundIndicators = htmlIndicators.filter(indicator => 
+                decompressed.toLowerCase().includes(indicator.toLowerCase())
+            );
+            console.log('- HTML indicators found:', foundIndicators);
+            
+            if (foundIndicators.length === 0) {
+                console.log('⚠️  WARNING: Decompressed content does not appear to be HTML!');
+            }
+            
+        } catch (debugError) {
+            console.log('✗ Decompression failed:', debugError.message);
+        }
+        
+        console.log('=== END DEBUG INFO ===\n');
+        
+    } catch (error) {
+        console.error('Error debugging email content:', error);
+    }
+}
+
+
+function startEmailScheduler() {
+  console.log('Starting email scheduler...');
+  
+
+  processPendingEmails();
+  
+ 
+  const job = cron.schedule('* * * * *', () => {
+    console.log("HEYLLO")
+      processPendingEmails();
+  });
+
+  console.log('Email scheduler started. Will run every minute.');
+  return job; 
+}
+
+
+async function triggerEmailProcessing() {
+  console.log('Manually triggering email processing...');
+  await processPendingEmails();
+}
+startEmailScheduler();
+
+//  triggerEmailProcessing();
 
 // Start server
 const PORT = process.env.PORT || 3001;

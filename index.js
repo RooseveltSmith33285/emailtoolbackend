@@ -64,17 +64,29 @@ const htmlUpload = multer({
 });
 
 // Configure CSV upload
-const csvUpload = multer({
-  storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit for CSV
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'text/csv' || file.originalname.toLowerCase().endsWith('.csv')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only CSV files are allowed'));
+
+const csvDiskStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+      const uploadDir = '/tmp'; // Use /tmp directory on Vercel
+      cb(null, uploadDir);
+    },
+    filename: (req, file, cb) => {
+      cb(null, `${Date.now()}-${file.originalname}`);
     }
-  }
-});
+  });
+  
+  const csvUploadDisk = multer({
+    storage: csvDiskStorage,
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit for CSV
+    fileFilter: (req, file, cb) => {
+      if (file.mimetype === 'text/csv' || file.originalname.toLowerCase().endsWith('.csv')) {
+        cb(null, true);
+      } else {
+        cb(new Error('Only CSV files are allowed'));
+      }
+    }
+  });
+  
 
 // ConvertAPI configuration
 const CONVERT_API_TOKEN = 'NRvX3zRchgRlgoURevXe6OSTqjxEj0go';
@@ -457,7 +469,9 @@ async function sendEmail(transporter, toEmail, htmlContent, subject = 'Your Docu
 }
 
 // Email extraction endpoint
-app.post('/api/extract-emails', csvUpload.single('contacts'), async (req, res) => {
+
+
+app.post('/api/extract-emails', csvUploadDisk.single('contacts'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No CSV file uploaded' });

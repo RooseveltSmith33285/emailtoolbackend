@@ -117,7 +117,7 @@ app.post('/api/send-html-template', htmlUpload.single('htmlTemplate'), async (re
 
     for (const contact of contacts) {
       try {
-        await sendEmail(transporter, contact.email, htmlContent, subject || 'Your Document');
+        await sendEmail(transporter, contact.email, htmlContent, "Enrichify mail");
         successCount++;
         await new Promise(resolve => setTimeout(resolve, 200));
       } catch (emailError) {
@@ -442,7 +442,7 @@ function createEmailTransporter() {
 async function sendEmail(transporter, toEmail, htmlContent, subject = 'Your Document') {
   const mailOptions = {
     from: '"Lead Enrichment System" <leads@enrichifydata.com>',
-    subject: 'Enrichify mail',
+    subject: subject,
     to: toEmail,
     html: htmlContent,
     text: 'Please view this email in an HTML-compatible client to see the document content.',

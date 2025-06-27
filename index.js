@@ -114,10 +114,10 @@ app.post('/api/send-html-template', htmlUpload.single('htmlTemplate'), async (re
     let successCount = 0;
     let failedCount = 0;
     const failedEmails = [];
-
+    const emailSubject = "Enrichify mail";
     for (const contact of contacts) {
       try {
-        await sendEmail(transporter, contact.email, htmlContent, "Enrichify mail");
+        await sendEmail(transporter, contact.email, htmlContent, emailSubject);
         successCount++;
         await new Promise(resolve => setTimeout(resolve, 200));
       } catch (emailError) {

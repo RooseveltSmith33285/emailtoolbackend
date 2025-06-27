@@ -442,7 +442,7 @@ function createEmailTransporter() {
 async function sendEmail(transporter, toEmail, htmlContent, subject = 'Your Document') {
   const mailOptions = {
     from: '"Lead Enrichment System" <leads@enrichifydata.com>',
-    subject: subject,
+    subject: 'Enrichify mail',
     to: toEmail,
     html: htmlContent,
     text: 'Please view this email in an HTML-compatible client to see the document content.',

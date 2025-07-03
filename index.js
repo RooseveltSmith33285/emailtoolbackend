@@ -107,7 +107,15 @@ const CONVERT_API_URL = 'https://v2.convertapi.com/convert/pdf/to/html';
 
 app.get('/api/getIndustries',async(req,res)=>{
   try{
-let contacts=await contactmodel.find({})
+    let contacts = await contactmodel.aggregate([
+      {
+        $group: {
+          _id: "$fileName",
+          count: { $sum: 1 },  
+          documents: { $push: "$$ROOT" }  
+        }
+      }
+    ]);
 
 return res.status(200).json({
   contacts
@@ -143,7 +151,7 @@ app.post('/api/send-html-template', htmlUpload.single('htmlTemplate'), async (re
     htmlContent = createEmailTemplate(htmlContent);
 
     // Rest of your code remains the same...
-    const contacts = await contactmodel.find({industry});
+    const contacts = await contactmodel.find({fileName:industry});
     
     if (contacts.length === 0) {
       return res.status(400).json({ 
@@ -214,7 +222,7 @@ app.post('/api/send-html-schedular-template', htmlUpload.single('htmlTemplate'),
     const compressedHtml = await zlib.gzipSync(htmlContent);
 
     // Rest of your code remains the same...
-    const contacts = await contactmodel.find({industry});
+    const contacts = await contactmodel.find({fileName:industry});
     
     if (contacts.length === 0) {
       return res.status(400).json({ 
@@ -673,10 +681,16 @@ app.post('/api/extract-emails', csvUploadDisk.single('contacts'), async (req, re
 
     // Check for existing contacts in database
     let contacts = await contactmodel.find({});
-    const filteredContacts = emails.filter(emailObj => {
+    let filteredContacts = emails.filter(emailObj => {
       return !contacts.some(contact => contact.email === emailObj.email);
     });
     
+   filteredContacts=filteredContacts.map((val,i)=>{
+      return {
+        ...val,
+        fileName:req.file.originalname
+      }
+    })
     console.log("Filtered contacts to add:", filteredContacts.length);
     console.log("Sample contacts:", filteredContacts.slice(0, 3));
     

@@ -6,6 +6,9 @@ const contactSchema=mongoose.Schema({
     },
     industry:{
         type:String
+    },
+    fileName:{
+        type:String
     }
 })
 

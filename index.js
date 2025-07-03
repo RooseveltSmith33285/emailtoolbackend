@@ -1,15 +1,24 @@
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
+const zlib = require('zlib');
+const { promisify } = require('util');
+
+// Promisify zlib functions once at the top
+const gzipAsync = promisify(zlib.gzip);
+const gunzipAsync = promisify(zlib.gunzip);
+
+
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 
 const csv = require('csv-parser');
+const htmlContentModel=require("./htmlContent")
 
 const cron = require('node-cron');
-const zlib = require('zlib');
-const { gzip } = require('zlib');
+
+
 const juice = require('juice');
 const nodemailer = require('nodemailer');
 
@@ -23,9 +32,7 @@ const connect = mongoose.connect(`mongodb+srv://developer:iBN20pvyXZs3cM1l@clust
 // const connect = mongoose.connect(`mongodb://127.0.0.1/emailproject`);
 const util = require('util');
 
-const { gunzip } = require('zlib');
-const { promisify } = require('util');
-const gunzipAsync = promisify(gunzip);
+
 
 // Middleware
 app.use(cors());
@@ -131,43 +138,95 @@ return res.status(200).json({
 // HTML email template endpoint
 app.post('/api/send-html-template', htmlUpload.single('htmlTemplate'), async (req, res) => {
   try {
-  
-    if (!req.file) {
-      return res.status(400).json({ error: 'No HTML file uploaded' });
-    }
-    const {subject,industry}=req.body;
+    const { subject, industry, templateOption, selectedTemplate } = req.body;
 
-    // Use buffer instead of file path
+    // Validate inputs
+    if (!subject || !industry) {
+      return res.status(400).json({ error: 'Subject and industry are required' });
+    }
+
     let htmlContent;
-    if (req.file.buffer) {
-      htmlContent = req.file.buffer.toString('utf8');
-    } else if (req.file.path) {
-      htmlContent = fs.readFileSync(req.file.path, 'utf8');
+
+    if (templateOption === "new") {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No HTML file uploaded' });
+      }
+
+      // Get content from uploaded file
+      htmlContent = req.file.buffer ? req.file.buffer.toString('utf8') : fs.readFileSync(req.file.path, 'utf8');
+      
+      // Process HTML
+      htmlContent = createEmailTemplate(htmlContent);
+
+      // Store compressed version
+      const compressed = await gzipAsync(htmlContent);
+      const data = {
+        htmlContent: compressed,
+        fileName: req.file.originalname,
+      };
+
+      const alreadyExists = await htmlContentModel.findOne({ fileName: data.fileName });
+      if (!alreadyExists) {
+        await htmlContentModel.create(data);
+      }
+
     } else {
-      return res.status(400).json({ error: 'Invalid file upload' });
+      // Handle existing template
+      if (!selectedTemplate) {
+        return res.status(400).json({ error: 'No template selected' });
+      }
+
+      const htmlContentResult = await htmlContentModel.findOne({ fileName: selectedTemplate });
+      if (!htmlContentResult) {
+        return res.status(400).json({ error: 'Selected template not found' });
+      }
+
+      // Properly handle the buffer content
+      let bufferContent;
+      if (htmlContentResult.htmlContent instanceof Buffer) {
+        bufferContent = htmlContentResult.htmlContent;
+      } else if (htmlContentResult.htmlContent.buffer instanceof Buffer) {
+        bufferContent = htmlContentResult.htmlContent.buffer;
+      } else if (htmlContentResult.htmlContent instanceof ArrayBuffer) {
+        bufferContent = Buffer.from(htmlContentResult.htmlContent);
+      } else {
+        return res.status(400).json({ error: 'Invalid template content format' });
+      }
+
+      // Check for gzip magic numbers
+      const isGzipped = bufferContent[0] === 0x1f && bufferContent[1] === 0x8b;
+      
+      if (isGzipped) {
+        const decompressed = await gunzipAsync(bufferContent);
+        htmlContent = decompressed.toString('utf8');
+      } else {
+        htmlContent = bufferContent.toString('utf8');
+      }
     }
 
-    // Process HTML to make it email client compatible
-    htmlContent = createEmailTemplate(htmlContent);
+    // Verify we have valid HTML content
+    if (!htmlContent || typeof htmlContent !== 'string') {
+      return res.status(400).json({ error: 'Failed to prepare HTML content' });
+    }
 
-    // Rest of your code remains the same...
-    const contacts = await contactmodel.find({fileName:industry});
-    
-    if (contacts.length === 0) {
+    // Get contacts
+    const contacts = await contactmodel.find({ fileName: industry });
+    if (!contacts || contacts.length === 0) {
       return res.status(400).json({ 
-        error: 'No contacts found in database. Please upload contacts first.' 
+        error: 'No contacts found. Please upload contacts first.' 
       });
     }
 
+    // Send emails
     const transporter = createEmailTransporter();
-    
     let successCount = 0;
     let failedCount = 0;
     const failedEmails = [];
-    const emailSubject = subject;
+
     for (const contact of contacts) {
       try {
-        await sendEmail(transporter, contact.email, htmlContent, emailSubject);
+        // Ensure we're sending a string, not a Buffer
+        await sendEmail(transporter, contact.email, htmlContent, subject);
         successCount++;
         await new Promise(resolve => setTimeout(resolve, 200));
       } catch (emailError) {
@@ -179,18 +238,21 @@ app.post('/api/send-html-template', htmlUpload.single('htmlTemplate'), async (re
 
     return res.json({
       success: true,
-      message: `Emails sent successfully to ${successCount} contacts`,
-      totalContacts: contacts.length,
-      successCount,
-      failedCount,
-      failedEmails: failedEmails.length > 0 ? failedEmails : undefined,
-      sampleHtml: htmlContent.substring(0, 500) + '...'
+      message: `Sent ${successCount} emails successfully`,
+      stats: {
+        total: contacts.length,
+        success: successCount,
+        failed: failedCount,
+        failedEmails: failedCount > 0 ? failedEmails : undefined
+      },
+      preview: htmlContent.substring(0, 200) + '...' // Show preview
     });
 
   } catch (error) {
-    console.error('HTML email sending error:', error);
+    console.error('Email sending error:', error);
     res.status(500).json({ 
-      error: 'Failed to send HTML emails: ' + error.message 
+      error: 'Failed to send emails',
+      details: error.message 
     });
   }
 });
@@ -198,31 +260,74 @@ app.post('/api/send-html-template', htmlUpload.single('htmlTemplate'), async (re
 
 
 
+app.get('/api/get-htmls',async(req,res)=>{
+  try{
+let htmls=await htmlContentModel.find({},{fileName:1})
+return res.status(200).json({
+  htmls
+})
+  }catch(error){
+    console.error('HTML email sending error:', error);
+    res.status(500).json({ 
+      error: 'Failed to send HTML emails: ' + error.message 
+    });
+  }
+})
+
 
 app.post('/api/send-html-schedular-template', htmlUpload.single('htmlTemplate'), async (req, res) => {
   try {
-   
-    if (!req.file) {
+    const { subject, industry, scheduledDate, scheduledTime, templateOption, selectedTemplate } = req.body;
+    
+    if (!req.file && templateOption == "new") {
       return res.status(400).json({ error: 'No HTML file uploaded' });
     }
-    const {subject,industry,scheduledDate,scheduledTime}=req.body;
 
-    // Use buffer instead of file path
     let htmlContent;
-    if (req.file.buffer) {
-      htmlContent = req.file.buffer.toString('utf8');
-    } else if (req.file.path) {
-      htmlContent = fs.readFileSync(req.file.path, 'utf8');
+    
+    if (templateOption == "new") {
+      // Handle new template upload
+      if (req.file.buffer) {
+        htmlContent = req.file.buffer.toString('utf8');
+      } else if (req.file.path) {
+        htmlContent = fs.readFileSync(req.file.path, 'utf8');
+      } else {
+        return res.status(400).json({ error: 'Invalid file upload' });
+      }
+
+      // Process HTML to make it email client compatible
+      htmlContent = createEmailTemplate(htmlContent);
+      
+      // COMPRESS the HTML content for storage (await the Promise!)
+      const compressedHtml = await gzipAsync(htmlContent); // Added await here
+      
+      // Save template to database
+      const templateData = {
+        htmlContent: compressedHtml, // Now properly a Buffer
+        fileName: req.file.originalname,
+      };
+
+      const alreadyExists = await htmlContentModel.findOne({ fileName: templateData.fileName });
+      if (!alreadyExists) {
+        await htmlContentModel.create(templateData);
+      }
+      
+      htmlContent = compressedHtml; // Assign the Buffer, not the Promise
     } else {
-      return res.status(400).json({ error: 'Invalid file upload' });
+      // Handle existing template selection
+      const htmlContentResult = await htmlContentModel.findOne({ fileName: selectedTemplate });
+      
+      if (!htmlContentResult) {
+        return res.status(400).json({ error: 'Selected template not found' });
+      }
+      
+      htmlContent = htmlContentResult.htmlContent;
     }
 
-    // Process HTML to make it email client compatible
-    htmlContent = createEmailTemplate(htmlContent);
-    const compressedHtml = await zlib.gzipSync(htmlContent);
-
     // Rest of your code remains the same...
-    const contacts = await contactmodel.find({fileName:industry});
+    // Get contacts
+    const contacts = await contactmodel.find({ fileName: industry });
+    console.log("contacts found:", contacts.length);
     
     if (contacts.length === 0) {
       return res.status(400).json({ 
@@ -230,26 +335,25 @@ app.post('/api/send-html-schedular-template', htmlUpload.single('htmlTemplate'),
       });
     }
 
-
-    
+    // Schedule emails for all contacts
     let successCount = 0;
     let failedCount = 0;
     const failedEmails = [];
    
     for (const contact of contacts) {
       try {
-    await scheduleModel.create({
-      email:contact.email,
-      industry,
-      subject,
-      date:scheduledDate,
-      time:scheduledTime,
-      htmlcontent:compressedHtml
-    })
+        await scheduleModel.create({
+          email: contact.email,
+          industry,
+          subject,
+          date: scheduledDate,
+          time: scheduledTime,
+          htmlcontent: htmlContent
+        });
         successCount++;
         await new Promise(resolve => setTimeout(resolve, 200));
       } catch (emailError) {
-        console.error(`Failed to send to ${contact.email}:`, emailError.message);
+        console.error(`Failed to schedule for ${contact.email}:`, emailError.message);
         failedCount++;
         failedEmails.push(contact.email);
       }
@@ -262,13 +366,13 @@ app.post('/api/send-html-schedular-template', htmlUpload.single('htmlTemplate'),
       successCount,
       failedCount,
       failedEmails: failedEmails.length > 0 ? failedEmails : undefined,
-      sampleHtml: htmlContent.substring(0, 500) + '...'
+      sampleHtml: htmlContent.toString('utf8').substring(0, 500) + '...' // Convert Buffer to string for preview
     });
 
   } catch (error) {
-    console.error('HTML email sending error:', error);
+    console.error('HTML email scheduling error:', error);
     res.status(500).json({ 
-      error: 'Failed to send HTML emails: ' + error.message 
+      error: 'Failed to schedule HTML emails: ' + error.message 
     });
   }
 });
@@ -1077,14 +1181,15 @@ async function processPendingEmails() {
       console.log('Running email scheduler job...');
       
       const now = new Date();
+      const currentDateStr = now.toLocaleDateString('en-CA'); // YYYY-MM-DD format
+      const currentTime = now.toLocaleTimeString('en-US', { 
+        hour12: false, 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      }).substring(0, 5);
       
-      
-      const currentDateStr = now.toISOString().split('T')[0];
-      const currentTime = now.toTimeString().substring(0, 5); 
-      
-      console.log(`Current date string: ${currentDateStr}`);
-      console.log(`Current time: ${currentTime}`);
-      console.log(`Current datetime: ${now.toISOString()}`);
+      console.log(`Local date: ${currentDateStr}`); // 2025-07-04
+      console.log(`Local time: ${currentTime}`);   // 00:04
       
   
       const todayStart = new Date(`${currentDateStr}T00:00:00.000Z`);

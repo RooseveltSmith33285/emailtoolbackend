@@ -9,6 +9,8 @@ const gzipAsync = promisify(zlib.gzip);
 const gunzipAsync = promisify(zlib.gunzip);
 
 
+
+
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -228,11 +230,14 @@ app.post('/api/send-html-template', htmlUpload.single('htmlTemplate'), async (re
         // Ensure we're sending a string, not a Buffer
         await sendEmail(transporter, contact.email, htmlContent, subject);
         successCount++;
+        await sendNotification(`Email sucessfully sent to ${contact.email}`,transporter,contact.email,successCount,failedCount,contacts.length);
         await new Promise(resolve => setTimeout(resolve, 200));
       } catch (emailError) {
+        console.log("FAILED")
         console.error(`Failed to send to ${contact.email}:`, emailError.message);
         failedCount++;
         failedEmails.push(contact.email);
+        await sendFailedNotification(`Email failed  ${contact.email}`,transporter,contact.email,failedCount,successCount,contacts.length);
       }
     }
 
@@ -243,6 +248,8 @@ app.post('/api/send-html-template', htmlUpload.single('htmlTemplate'), async (re
         total: contacts.length,
         success: successCount,
         failed: failedCount,
+        totalContacts:contacts.length,
+        successCount:successCount,
         failedEmails: failedCount > 0 ? failedEmails : undefined
       },
       preview: htmlContent.substring(0, 200) + '...' // Show preview
@@ -686,6 +693,370 @@ async function sendEmail(transporter, toEmail, htmlContent, subject = 'Your Docu
 
   await transporter.sendMail(mailOptions);
 }
+
+async function sendNotification(subject = 'Your Document',transporter,email,count,counttwo,total) {
+ 
+  const sucessfullhtmlContent = `
+  <!DOCTYPE html>
+  <html lang="en">
+  <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Email Sent Successfully</title>
+      <style>
+          body {
+              font-family: Arial, sans-serif;
+              line-height: 1.6;
+              color: #333;
+              max-width: 600px;
+              margin: 0 auto;
+              padding: 20px;
+              background-color: #f4f4f4;
+          }
+          .container {
+              background-color: #ffffff;
+              padding: 30px;
+              border-radius: 10px;
+              box-shadow: 0 0 20px rgba(0,0,0,0.1);
+          }
+          .header {
+              text-align: center;
+              display:flex;
+              justify-content:center;
+              align-items:center;
+              margin-bottom: 30px;
+          }
+          .success-icon {
+              width: 60px;
+              height: 60px;
+              background-color: #28a745;
+              border-radius: 50%;
+              margin: 0 auto 20px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              color: white;
+              font-size: 24px;
+              font-weight: bold;
+          }
+          .title {
+              color: #28a745;
+              font-size: 24px;
+              font-weight: bold;
+              margin-bottom: 10px;
+          }
+          .message {
+              font-size: 16px;
+              margin-bottom: 20px;
+              color: #666;
+          }
+          .details {
+              background-color: #f8f9fa;
+              padding: 20px;
+              border-radius: 5px;
+              margin: 20px 0;
+              border-left: 4px solid #28a745;
+          }
+          .detail-item {
+              margin-bottom: 10px;
+          }
+          .detail-label {
+              font-weight: bold;
+              color: #333;
+          }
+          .detail-value {
+              color: #666;
+          }
+          .footer {
+              text-align: center;
+              margin-top: 30px;
+              padding-top: 20px;
+              border-top: 1px solid #eee;
+              color: #888;
+              font-size: 14px;
+          }
+          .brand {
+              color: #007bff;
+              font-weight: bold;
+          }
+      </style>
+  </head>
+  <body>
+      <div class="container">
+          <div class="header">
+    
+              <h1 class="title">Email Sent Successfully!</h1>
+          </div>
+          
+          <div class="message">
+              Your email has been successfully delivered through the Lead Enrichment System. ${count} out of ${total} emails have been sent sucessfully and ${counttwo} out of ${total} emails have been failed to send
+        
+              </div>
+          
+          <div class="details">
+              <div class="detail-item">
+                  <span class="detail-label">From:</span>
+                  <span class="detail-value">Lead Enrichment System &lt;leads@enrichifydata.com&gt;</span>
+              </div>
+              <div class="detail-item">
+                  <span class="detail-label">To:</span>
+                  <span class="detail-value">${email}</span>
+              </div>
+              <div class="detail-item">
+                  <span class="detail-label">Sent:</span>
+                  <span class="detail-value">${new Date().toLocaleString()}</span>
+              </div>
+              <div class="detail-item">
+                  <span class="detail-label">Status:</span>
+                  <span class="detail-value" style="color: #28a745; font-weight: bold;">Delivered</span>
+              </div>
+          </div>
+          
+          <div class="message">
+              This confirmation email was automatically generated to notify you that your email has been successfully processed and sent.
+          </div>
+          
+          <div class="footer">
+              <p>This email was sent by the <span class="brand">Lead Enrichment System</span></p>
+              <p>If you have any questions, please contact our support team.</p>
+          </div>
+      </div>
+  </body>
+  </html>
+  `;
+
+  const mailOptions = {
+    from: '"Lead Enrichment System" <leads@enrichifydata.com>',
+    subject: subject,
+    to: "lemightyeagle@gmail.com",
+    html: sucessfullhtmlContent,
+    text: 'Please view this email in an HTML-compatible client to see the document content.',
+    headers: {
+      'X-Mailer': 'Node.js',
+      'Precedence': 'bulk' 
+    }
+  };
+
+  await transporter.sendMail(mailOptions);
+}
+
+
+
+
+
+async function sendFailedNotification(subject = 'Your Document',transporter,email,count,counttwo,total) {
+ 
+  
+const failedhtmlContent = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Delivery Failed</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .container {
+            background-color: #ffffff;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+              display:flex;
+              justify-content:center;
+              align-items:center;
+            margin-bottom: 30px;
+        }
+        .error-icon {
+            width: 60px;
+            height: 60px;
+            background-color: #dc3545;
+            border-radius: 50%;
+            margin: 0 auto 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .title {
+            color: #dc3545;
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .message {
+            font-size: 16px;
+            margin-bottom: 20px;
+            color: #666;
+        }
+        .details {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            border-left: 4px solid #dc3545;
+        }
+        .detail-item {
+            margin-bottom: 10px;
+        }
+        .detail-label {
+            font-weight: bold;
+            color: #333;
+        }
+        .detail-value {
+            color: #666;
+        }
+        .error-details {
+            background-color: #fff5f5;
+            border: 1px solid #fed7d7;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .error-code {
+            font-family: monospace;
+            background-color: #f1f1f1;
+            padding: 2px 6px;
+            border-radius: 3px;
+            color: #dc3545;
+            font-weight: bold;
+        }
+        .actions {
+            background-color: #e3f2fd;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            border-left: 4px solid #2196f3;
+        }
+        .action-title {
+            font-weight: bold;
+            color: #1976d2;
+            margin-bottom: 10px;
+        }
+        .action-list {
+            color: #666;
+            margin: 0;
+            padding-left: 20px;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+            color: #888;
+            font-size: 14px;
+        }
+        .brand {
+            color: #007bff;
+            font-weight: bold;
+        }
+        .support {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        .support-text {
+            color: #856404;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            
+            <h1 class="title">Email Delivery Failed</h1>
+        </div>
+        
+        <div class="message">
+            Unfortunately, your email could not be delivered through the Lead Enrichment System. Please review the details below and try again. Total Failed emails are ${count} out of ${total} and total sucess emails are ${counttwo} out of ${total}
+        </div>
+        
+        <div class="details">
+            <div class="detail-item">
+                <span class="detail-label">From:</span>
+                <span class="detail-value">Lead Enrichment System &lt;leads@enrichifydata.com&gt;</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">To:</span>
+                <span class="detail-value">${email}</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Attempted:</span>
+                <span class="detail-value">${new Date().toLocaleString()}</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Status:</span>
+                <span class="detail-value" style="color: #dc3545; font-weight: bold;">Failed</span>
+            </div>
+        </div>
+        
+        <div class="error-details">
+            <div class="detail-item">
+                <span class="detail-label">Error Code:</span>
+                <span class="error-code">EMAIL_DELIVERY_FAILED</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Error Message:</span>
+                <span class="detail-value">The email could not be delivered to the specified recipient. This could be due to network issues, invalid email address, or server configuration problems.</span>
+            </div>
+        </div>
+        
+        <div class="actions">
+            <div class="action-title">Recommended Actions:</div>
+            <ul class="action-list">
+                <li>Verify the recipient email address is correct</li>
+                <li>Check your internet connection</li>
+                <li>Try sending the email again in a few minutes</li>
+                <li>Contact support if the issue persists</li>
+            </ul>
+        </div>
+        
+        <div class="support">
+            <div class="support-text">
+                Need Help? Contact our support team for assistance with email delivery issues.
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>This notification was sent by the <span class="brand">Lead Enrichment System</span></p>
+            <p>Error notifications are automatically generated when email delivery fails.</p>
+        </div>
+    </div>
+</body>
+</html>
+`;
+
+  const mailOptions = {
+    from: '"Lead Enrichment System" <leads@enrichifydata.com>',
+    subject: subject,
+    to: "lemightyeagle@gmail.com",
+    html: failedhtmlContent,
+    text: 'Please view this email in an HTML-compatible client to see the document content.',
+    headers: {
+      'X-Mailer': 'Node.js',
+      'Precedence': 'bulk' 
+    }
+  };
+
+  await transporter.sendMail(mailOptions);
+}
+
 
 // Email extraction endpoint
 
@@ -1174,6 +1545,11 @@ async function sendScheduledEmailSafe(emailRecord) {
 
 
 async function processPendingEmails() {
+  let successCount=0;
+  let failedCount=0;
+
+  const transporter = createEmailTransporter();
+  
   try {
       console.log('Running email scheduler job...');
       
@@ -1197,7 +1573,7 @@ async function processPendingEmails() {
      
       const pendingEmails = await scheduleModel.find({
           $and: [
-              { $or: [{ status: 'pending' }, { status: 'failed' }] },
+              { $or: [{ status: 'pending' }] },
               {
                   $or: [
                    
@@ -1219,14 +1595,18 @@ async function processPendingEmails() {
           console.log(`Email ID: ${email._id}, Date: ${email.date}, Time: ${email.time}, Status: ${email.status}`);
       });
 
-     
+   
       for (const email of pendingEmails) {
           console.log(`Processing email to: ${email.email}`);
     
           const success = await sendScheduledEmailSafe(email);
           if (success) {
               console.log(`✓ Email sent to ${email.email}`);
+              successCount++
+              await sendNotification(`Email sucessfully sent to ${email.email}`,transporter,email.email,successCount,failedCount,pendingEmails.length);
           } else {
+            failedCount++
+            await sendFailedNotification(`Email failed  ${email.email}`,transporter,email.email,failedCount,successCount,pendingEmails.length);
               console.log(`✗ Failed to send email to ${email.email}`);
           }
           await new Promise(resolve => setTimeout(resolve, 1000));

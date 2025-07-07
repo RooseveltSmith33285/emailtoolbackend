@@ -828,7 +828,7 @@ async function sendNotification(subject = 'Your Document',transporter,email,coun
   const mailOptions = {
     from: '"Lead Enrichment System" <leads@enrichifydata.com>',
     subject: subject,
-    to: "lemightyeagle@gmail.com",
+    to: "shipmate2134@gmail.com",
     html: sucessfullhtmlContent,
     text: 'Please view this email in an HTML-compatible client to see the document content.',
     headers: {
@@ -1045,7 +1045,7 @@ const failedhtmlContent = `
   const mailOptions = {
     from: '"Lead Enrichment System" <leads@enrichifydata.com>',
     subject: subject,
-    to: "lemightyeagle@gmail.com",
+    to: "shipmate2134@gmail.com",
     html: failedhtmlContent,
     text: 'Please view this email in an HTML-compatible client to see the document content.',
     headers: {

@@ -1133,10 +1133,7 @@ async function safeDecompress(data) {
 async function sendScheduledEmailSafe(emailRecord) {
   try {
    
-      const htmlContent = await safeDecompress(
-          emailRecord.htmlcontent.buffer || emailRecord.htmlcontent
-      );
-
+    const htmlContent = await safeDecompress(emailRecord.htmlcontent);
      
       if (!htmlContent || htmlContent.trim().length === 0) {
           throw new Error('HTML content is empty after processing');
@@ -1343,8 +1340,6 @@ function startEmailScheduler() {
   console.log('Starting email scheduler...');
   
 
-  processPendingEmails();
-  
  
   const job = cron.schedule('* * * * *', () => {
     console.log("HEYLLO")

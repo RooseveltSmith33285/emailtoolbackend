@@ -28,7 +28,7 @@ const app = express();
 const mongoose = require('mongoose');
 const contactmodel = require('./contact');
 const scheduleModel = require('./scheduled');
-
+const emailSentModel=require('./emailSent')
 const connect = mongoose.connect(`mongodb+srv://developer:iBN20pvyXZs3cM1l@cluster0.k1ekxcf.mongodb.net/`);
 
 // const connect = mongoose.connect(`mongodb://127.0.0.1/emailproject`);
@@ -232,6 +232,7 @@ app.post('/api/send-html-template', htmlUpload.single('htmlTemplate'), async (re
         successCount++;
         await sendNotification(`Email sucessfully sent to ${contact.email}`,transporter,contact.email,successCount,failedCount,contacts.length);
         await new Promise(resolve => setTimeout(resolve, 200));
+        await emailSentModel.create({contact:contact._id})
       } catch (emailError) {
         console.log("FAILED")
         console.error(`Failed to send to ${contact.email}:`, emailError.message);
@@ -383,6 +384,27 @@ app.post('/api/send-html-schedular-template', htmlUpload.single('htmlTemplate'),
     });
   }
 });
+
+
+app.get('/getEmailSentInfo',async(req,res)=>{
+  try{
+let emailSent=await emailSentModel.find({}).populate('contact')
+const lastEmailSent = await emailSentModel
+  .findOne({})
+  .sort({ createdAt: -1 })
+  .populate('contact');
+
+  return res.status(200).json({
+    emailSent,
+    lastEmailSent
+  })
+  }catch(error){
+    console.error('HTML email scheduling error:', error);
+    res.status(500).json({ 
+      error: 'Failed to schedule HTML emails: ' + error.message 
+    });
+  }
+})
 // PDF to HTML conversion endpoint (existing)
 app.post('/api/convert-template', upload.single('template'), async (req, res) => {
   try {
@@ -478,6 +500,9 @@ app.post('/api/convert-template', upload.single('template'), async (req, res) =>
     });
   }
 });
+
+
+
 function createEmailTemplate(content) {
   let html = content;
 
@@ -668,8 +693,8 @@ function createEmailTransporter() {
   return nodemailer.createTransport({
     service: 'gmail',
     auth: {
-      user: 'leads@enrichifydata.com',
-      pass: 'cazhzgbslrzvyjfc'
+      user: 'leads@enrichifydata.com', 
+      pass: 'obeahkmflwnesojn' 
     },
     pool: true, // Use connection pooling
     rateLimit: 5, // Max 5 messages per second
@@ -828,7 +853,7 @@ async function sendNotification(subject = 'Your Document',transporter,email,coun
   const mailOptions = {
     from: '"Lead Enrichment System" <leads@enrichifydata.com>',
     subject: subject,
-    to: "shipmate2134@gmail.com",
+    to: "lemightyeagle@gmail.com",
     html: sucessfullhtmlContent,
     text: 'Please view this email in an HTML-compatible client to see the document content.',
     headers: {
@@ -1045,7 +1070,7 @@ const failedhtmlContent = `
   const mailOptions = {
     from: '"Lead Enrichment System" <leads@enrichifydata.com>',
     subject: subject,
-    to: "shipmate2134@gmail.com",
+    to: "lemightyeagle@gmail.com",
     html: failedhtmlContent,
     text: 'Please view this email in an HTML-compatible client to see the document content.',
     headers: {
@@ -1604,7 +1629,8 @@ async function processPendingEmails() {
               console.log(`✓ Email sent to ${email.email}`);
               successCount++
               await sendNotification(`Email sucessfully sent to ${email.email}`,transporter,email.email,successCount,failedCount,pendingEmails.length);
-          } else {
+              await emailSentModel.create({contact:email ._id})
+            } else {
             failedCount++
             await sendFailedNotification(`Email failed  ${email.email}`,transporter,email.email,failedCount,successCount,pendingEmails.length);
               console.log(`✗ Failed to send email to ${email.email}`);
